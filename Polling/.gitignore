@@ -1,6 +1,13 @@
+# Environment file
 .env
+
+# Students app migrations
 students/0001_initial.py
 students/0002_superadmin_sms_otp_superadmin_sms_otp_created_and_more.py
+
+# Django settings file
 settings.py
-superadmin/models.py 
+
+# Superadmin app files
+superadmin/models.py
 superadmin/0001_initial.py
