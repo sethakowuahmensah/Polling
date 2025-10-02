@@ -3,3 +3,4 @@ students/0001_initial.py
 students/0002_superadmin_sms_otp_superadmin_sms_otp_created_and_more.py
 settings.py
 superadmin/models.py 
+superadmin/migrations/0001_initial.py
