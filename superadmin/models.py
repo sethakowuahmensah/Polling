@@ -3,6 +3,8 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.utils import timezone
 import pyotp
 
+
+# ================= SuperAdmin =================
 class SuperAdminManager(BaseUserManager):
     def create_superuser(self, email, name, phone_number, password):
         email = self.normalize_email(email)
@@ -24,6 +26,7 @@ class SuperAdminManager(BaseUserManager):
         user.set_password(password)
         user.save(using=self._db)
         return user
+
 
 class SuperAdmin(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=255)
@@ -62,9 +65,9 @@ class SuperAdmin(AbstractBaseUser, PermissionsMixin):
 
     @classmethod
     def create_default_superadmin(cls):
-        if not cls.objects.filter(email="sethakowuahmensah@gmail.com").exists():
+        if not cls.objects.filter(email="seth.mensah@amalitechtraining.org").exists():
             cls.objects.create_superuser(
-                email="sethakowuahmensah@gmail.com",
+                email="seth.mensah@amalitechtraining.org",
                 name="Sam Flex",
                 phone_number="+233277935236",
                 password="password100"
@@ -88,3 +91,28 @@ class SuperAdmin(AbstractBaseUser, PermissionsMixin):
             return False
         totp = pyotp.TOTP(self.two_fa_secret)
         return totp.verify(token)
+
+
+# ================= Admin =================
+class Admin(models.Model):
+    name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    phone_number = models.CharField(max_length=20, unique=True)
+    role = models.CharField(max_length=20, default="admin")  # Always "admin"
+    date_joined = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"Admin: {self.name} ({self.email})"
+
+
+# ================= Student =================
+class Student(models.Model):
+    student_id = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    phone_number = models.CharField(max_length=20, unique=True)
+    role = models.CharField(max_length=20, default="student")  # Always "student"
+    date_joined = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"Student: {self.name} ({self.email})"
