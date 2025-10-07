@@ -1,21 +1,46 @@
 from django.urls import path
 from .views import (
     SuperAdminLoginView,
-    VerifyOTPView,
-    Disable2FAView,
-    BulkUserImportView,
-    RoleUpdateView
+    RefreshTokenView,
+    ImportStudentsView,
+    AdminCreateView,
+    AdminListView,
+    AdminUpdateView,
+    AdminDeleteView,
+    UniversityCreateView,
+    UniversityListView,
+    UniversityUpdateView,
+    UniversityDeleteView,
+    RoleUpdateView,
+    CandidateCreateView,
+    CandidateListView,
+    CandidateUpdateView,
+    CandidateDeleteView,
+    ElectionCreateView,
+    ElectionListView,
+    ElectionUpdateView,
+    ElectionDeleteView,
 )
 
 urlpatterns = [
-    # Authentication endpoints
     path('login/', SuperAdminLoginView.as_view(), name='superadmin-login'),
-    path('verify-otp/', VerifyOTPView.as_view(), name='verify-otp'),
-    path('disable-2fa/', Disable2FAView.as_view(), name='disable-2fa'),
-
-    # Bulk import for Admins + Students
-    path('bulk-import/', BulkUserImportView.as_view(), name='bulk-import'),
-
-    # Update role (SuperAdmin only)
-    path('update-role/<int:pk>/', RoleUpdateView.as_view(), name='update-role'),
+    path('refresh-token/', RefreshTokenView.as_view(), name='refresh-token'),
+    path('import-students/', ImportStudentsView.as_view(), name='import-students'),
+    path('admins/create/', AdminCreateView.as_view(), name='admin-create'),
+    path('admins/', AdminListView.as_view(), name='admin-list'),
+    path('admins/<str:student_id>/', AdminUpdateView.as_view(), name='admin-update'),
+    path('admins/delete/<str:student_id>/', AdminDeleteView.as_view(), name='admin-delete'),
+    path('universities/create/', UniversityCreateView.as_view(), name='university-create'),
+    path('universities/', UniversityListView.as_view(), name='university-list'),
+    path('universities/<int:pk>/', UniversityUpdateView.as_view(), name='university-update'),
+    path('universities/delete/<int:pk>/', UniversityDeleteView.as_view(), name='university-delete'),
+    path('update-role/<str:student_id>/', RoleUpdateView.as_view(), name='role-update'),
+    path('candidates/create/', CandidateCreateView.as_view(), name='candidate-create'),
+    path('candidates/', CandidateListView.as_view(), name='candidate-list'),
+    path('candidates/<int:pk>/', CandidateUpdateView.as_view(), name='candidate-update'),
+    path('candidates/delete/<int:pk>/', CandidateDeleteView.as_view(), name='candidate-delete'),
+    path('elections/create/', ElectionCreateView.as_view(), name='election-create'),
+    path('elections/', ElectionListView.as_view(), name='election-list'),
+    path('elections/<int:pk>/', ElectionUpdateView.as_view(), name='election-update'),
+    path('elections/delete/<int:pk>/', ElectionDeleteView.as_view(), name='election-delete'),
 ]
