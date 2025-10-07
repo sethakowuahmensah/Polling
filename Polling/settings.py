@@ -23,10 +23,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework_simplejwt',  # Added missing comma
     'corsheaders',
 
     'students',
     'superadmin',
+    'university_admin',
 ]
 
 MIDDLEWARE = [
@@ -116,6 +118,7 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",  # Added to match default primary key
 }
 
 # ================= CORS Settings (if needed) =================
@@ -140,3 +143,6 @@ LOGGING = {
         },
     },
 }
+
+# ================= Custom User Model =================
+AUTH_USER_MODEL = 'superadmin.SuperAdmin'  # Added to use SuperAdmin as the user model

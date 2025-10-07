@@ -1,245 +1,49 @@
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.shortcuts import get_object_or_404
-from django.core.mail import EmailMessage
-from django.conf import settings
-from .models import SuperAdmin, Admin, Student
-from .serializers import SuperAdminSerializer, BulkUserSerializer, RoleUpdateSerializer
-import pyotp
-import qrcode
-import io
-import base64
+from .models import SuperAdmin
+from students.models import Student, Admin, University, Candidate, Election
+from .serializers import SuperAdminSerializer, UniversitySerializer, CandidateSerializer, ElectionSerializer, RoleUpdateSerializer
+from students.serializers import StudentSerializer, AdminSerializer
 import csv
-import json
-import pandas as pd
 from io import TextIOWrapper
-import os
-import uuid
-
 
 class SuperAdminLoginView(APIView):
-    """
-    Step 1: Initial login with email/password
-    Returns QR code if 2FA not set up, or requires OTP if already set up
-    """
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get('email')
         password = request.data.get('password')
-
         if not email or not password:
-            return Response({
-                "error": "Email and password required"
-            }, status=status.HTTP_400_BAD_REQUEST)
-
+            return Response({"error": "Email and password required"}, status=status.HTTP_400_BAD_REQUEST)
         try:
             admin = SuperAdmin.objects.get(email=email)
         except SuperAdmin.DoesNotExist:
-            return Response({
-                "error": "Invalid credentials"
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
-        # Verify password
+            return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
         if not admin.check_password(password):
-            return Response({
-                "error": "Invalid credentials"
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
-        # Check if 2FA is already enabled
-        if admin.two_fa_enabled and admin.two_fa_secret:
-            return Response({
-                "message": "Please provide OTP from Google Authenticator",
-                "requires_otp": True,
-                "email": admin.email
-            }, status=status.HTTP_200_OK)
-
-        # First time login - generate 2FA secret and QR code
-        if not admin.two_fa_secret:
-            admin.generate_2fa_secret()
-        
-        # Generate QR code
-        totp_uri = admin.get_totp_uri()
-        qr = qrcode.QRCode(version=1, box_size=10, border=5)
-        qr.add_data(totp_uri)
-        qr.make(fit=True)
-        
-        img = qr.make_image(fill_color="black", back_color="white")
-        buffer = io.BytesIO()
-        img.save(buffer, format='PNG')
-        qr_code_base64 = base64.b64encode(buffer.getvalue()).decode()
-
-        # Send setup email with manual entry key
-        try:
-            email_body = f"""
-Hello {admin.name},
-
-You are setting up Two-Factor Authentication (2FA) for your account.
-
-Please follow these steps:
-
-OPTION 1 - Scan QR Code (Recommended):
-1. Download Google Authenticator app on your phone (iOS/Android)
-2. Open the app and tap the "+" button
-3. Select "Scan a QR code"
-4. Scan the QR code provided in the login response
-
-OPTION 2 - Manual Entry:
-If you cannot scan the QR code, manually enter this key in Google Authenticator:
-
-Manual Entry Key: {admin.two_fa_secret}
-
-Account Name: {admin.email}
-Issuer: YourAppName
-
-Steps for manual entry:
-1. Open Google Authenticator app
-2. Tap the "+" button
-3. Select "Enter a setup key"
-4. Enter the account name and the key above
-5. Tap "Add"
-
-After setup, enter the 6-digit code from the app to complete authentication.
-
-IMPORTANT: Keep this key secure and do not share it with anyone.
-
-Best regards,
-YourAppName Security Team
-            """
-            
-            email_msg = EmailMessage(
-                subject="Two-Factor Authentication Setup - Manual Entry Key",
-                body=email_body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                to=[admin.email]
-            )
-            email_msg.send(fail_silently=False)
-        except Exception as e:
-            print(f"Email error: {str(e)}")
-            # Continue even if email fails
-
+            return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+        refresh = RefreshToken.for_user(admin)
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
         return Response({
-            "message": "Scan QR code with Google Authenticator app",
-            "requires_setup": True,
-            "qr_code": f"data:image/png;base64,{qr_code_base64}",
-            "manual_entry_key": admin.two_fa_secret,  # Backup if QR scan fails
-            "email": admin.email,
-            "setup_instructions": "Scan the QR code or manually enter the key in Google Authenticator"
+            "message": "Login successful",
+            "admin": {"email": admin.email, "name": admin.name},
+            "status": True,
+            "access_token": access_token,
+            "refresh_token": refresh_token
         }, status=status.HTTP_200_OK)
-
-
-class VerifyOTPView(APIView):
-    """
-    Step 2: Verify OTP code from Google Authenticator
-    Used both for initial setup and subsequent logins
-    """
-    def post(self, request):
-        email = request.data.get("email")
-        otp = request.data.get("otp")
-        is_setup = request.data.get("is_setup", False)  # True for first-time setup
-
-        if not email or not otp:
-            return Response({
-                "error": "Email and OTP are required"
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            admin = SuperAdmin.objects.get(email=email)
-        except SuperAdmin.DoesNotExist:
-            return Response({
-                "error": "Invalid email"
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
-        if not admin.two_fa_secret:
-            return Response({
-                "error": "2FA not set up for this account"
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Verify the OTP
-        if admin.verify_totp(otp):
-            # If this is initial setup, enable 2FA
-            if is_setup and not admin.two_fa_enabled:
-                admin.two_fa_enabled = True
-                admin.save()
-                
-                return Response({
-                    "message": "2FA setup completed successfully! You can now login.",
-                    "admin": SuperAdminSerializer(admin).data,
-                    "status": True,
-                    "setup_complete": True
-                }, status=status.HTTP_200_OK)
-            
-            # Regular login after 2FA is enabled
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(admin)
-            access_token = str(refresh.access_token)
-            refresh_token = str(refresh)
-            
-            return Response({
-                "message": "Login successful",
-                "admin": SuperAdminSerializer(admin).data,
-                "status": True,
-                "access_token": access_token,
-                "refresh_token": refresh_token
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                "error": "Invalid or expired OTP",
-                "status": False
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-
-class Disable2FAView(APIView):
-    """
-    Allow SuperAdmin to disable 2FA (requires password confirmation)
-    """
-    def post(self, request):
-        email = request.data.get("email")
-        password = request.data.get("password")
-
-        if not email or not password:
-            return Response({
-                "error": "Email and password required"
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            admin = SuperAdmin.objects.get(email=email)
-        except SuperAdmin.DoesNotExist:
-            return Response({
-                "error": "Invalid credentials"
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
-        if not admin.check_password(password):
-            return Response({
-                "error": "Invalid password"
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
-        admin.two_fa_enabled = False
-        admin.two_fa_secret = None
-        admin.save()
-
-        return Response({
-            "message": "2FA disabled successfully"
-        }, status=status.HTTP_200_OK)
-
 
 class RefreshTokenView(APIView):
-    """
-    Refresh access token using refresh token
-    """
+    permission_classes = [AllowAny]
     def post(self, request):
         refresh_token = request.data.get("refresh_token")
-        
         if not refresh_token:
-            return Response({
-                "error": "Refresh token required"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response({"error": "Refresh token required"}, status=status.HTTP_400_BAD_REQUEST)
         try:
             refresh = RefreshToken(refresh_token)
             access_token = str(refresh.access_token)
-            
             return Response({
                 "access_token": access_token,
                 "message": "Token refreshed successfully"
@@ -250,133 +54,316 @@ class RefreshTokenView(APIView):
                 "detail": str(e)
             }, status=status.HTTP_401_UNAUTHORIZED)
 
-
-# ================= Bulk Import Users (Students/Admins) =================
-class BulkUserImportView(APIView):
-    permission_classes = [IsAuthenticated]  # Require authentication
-    
+class ImportStudentsView(APIView):
+    permission_classes = [IsAuthenticated]
     def post(self, request):
-        file = request.FILES.get("file")
-        if not file:
-            return Response({"error": "File required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        filename = file.name.lower()
-        extension = os.path.splitext(filename)[1]
-
-        try:
-            records = []
-
-            if extension == ".csv":
-                data = TextIOWrapper(file.file, encoding="utf-8")
-                reader = csv.DictReader(data)
-                records = list(reader)
-            elif extension in [".xls", ".xlsx"]:
-                df = pd.read_excel(file)
-                records = df.to_dict(orient="records")
-            elif extension == ".json":
-                records = json.load(file)
-            elif extension == ".txt":
-                try:
-                    records = json.load(file)
-                except:
-                    data = TextIOWrapper(file.file, encoding="utf-8")
-                    reader = csv.DictReader(data, delimiter="\t")
-                    records = list(reader)
-            else:
-                return Response({"error": f"Unsupported file type: {extension}"}, status=status.HTTP_400_BAD_REQUEST)
-
-            imported_users = []
-            errors = []
-
-            for row in records:
-                if row.get("role", "student") == "student":
-                    if not row.get("student_id") or Student.objects.filter(student_id=row["student_id"]).exists():
-                        errors.append({"row": row, "error": "Duplicate or missing student_id"})
-                        continue
-                    if Student.objects.filter(email=row.get("email")).exists():
-                        errors.append({"row": row, "error": "Duplicate email"})
-                        continue
-
-                serializer = BulkUserSerializer(data=row)
-                if serializer.is_valid():
-                    serializer.save()
-                    imported_users.append(serializer.data)
-                else:
-                    errors.append({"row": row, "error": serializer.errors})
-
-            if errors:
-                return Response({
-                    "message": f"{len(imported_users)} users imported successfully, {len(errors)} rows skipped due to errors.",
-                    "users": imported_users,
-                    "errors": errors
-                }, status=status.HTTP_207_MULTI_STATUS)
-
-            return Response({
-                "message": f"{len(imported_users)} users imported successfully.",
-                "users": imported_users
-            }, status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-# ================= Role Update (SuperAdmin only) =================
-class RoleUpdateView(APIView):
-    def post(self, request, pk):
-        user_instance = Student.objects.filter(pk=pk).first() or Admin.objects.filter(pk=pk).first()
-
-        if not user_instance:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
         if not request.user.is_superuser:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = RoleUpdateSerializer(data=request.data)
-        if serializer.is_valid():
-            new_role = serializer.validated_data["role"]
-
-            if isinstance(user_instance, Student) and new_role == "admin":
-                admin = Admin(
-                    name=user_instance.name,
-                    email=user_instance.email,
-                    phone_number=user_instance.phone_number
-                )
-                admin.save()
-                user_instance.delete()
-                return Response({
-                    "message": "Student promoted to Admin",
-                    "user": {
-                        "name": admin.name,
-                        "email": admin.email,
-                        "role": "admin"
+        csv_file = request.FILES.get('file')
+        if not csv_file:
+            return Response({"error": "No CSV file provided"}, status=status.HTTP_400_BAD_REQUEST)
+        if not csv_file.name.endswith('.csv'):
+            return Response({"error": "File must be a CSV"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            file_wrapper = TextIOWrapper(csv_file, encoding='utf-8')
+            csv_data = csv.DictReader(file_wrapper)
+            for row in csv_data:
+                university_id = row.get('university_id')
+                if not university_id:
+                    return Response({"error": f"University ID missing for student {row.get('student_id')}"},
+                                  status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    university_id = int(university_id)
+                    university = get_object_or_404(University, id=university_id)
+                except (ValueError, TypeError):
+                    return Response({"error": f"Invalid university ID for student {row.get('student_id')}"},
+                                  status=status.HTTP_400_BAD_REQUEST)
+                Student.objects.update_or_create(
+                    student_id=row['student_id'],
+                    defaults={
+                        'name': row['name'],
+                        'email': row['email'],
+                        'phone_number': row['phone_number'],
+                        'university': university,
+                        'can_vote': True
                     }
-                })
-
-            elif isinstance(user_instance, Admin) and new_role == "student":
-                student = Student(
-                    student_id=str(uuid.uuid4()),
-                    name=user_instance.name,
-                    email=user_instance.email,
-                    phone_number=user_instance.phone_number
                 )
-                student.save()
-                user_instance.delete()
+            return Response({"message": "Students imported successfully"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Error processing CSV: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+class AdminCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        required_fields = ['student_id', 'name', 'email', 'phone_number', 'university']
+        missing = [field for field in required_fields if field not in request.data]
+        if missing:
+            return Response({"error": f"Missing required fields: {', '.join(missing)}"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate university ID
+        university_id = request.data.get('university')
+        try:
+            university_id = int(university_id)
+            get_object_or_404(University, id=university_id)
+        except (ValueError, TypeError):
+            return Response({"error": "University must be a valid ID (integer)"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Construct student data
+        student_data = {
+            'student_id': request.data['student_id'],
+            'name': request.data['name'],
+            'email': request.data['email'],
+            'phone_number': request.data['phone_number'],
+            'university': university_id,
+            'can_vote': True
+        }
+        
+        # Use StudentSerializer directly to avoid nesting issues
+        student_serializer = StudentSerializer(data=student_data)
+        if student_serializer.is_valid():
+            student = student_serializer.save()
+            admin_data = {
+                'student': student,
+                'role': 'admin',
+                'name': request.data.get('name', '')
+            }
+            admin = Admin.objects.create(**admin_data)
+            return Response({
+                "message": "Admin created",
+                "admin": AdminSerializer(admin).data
+            }, status=status.HTTP_201_CREATED)
+        return Response(student_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class AdminListView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        admins = Admin.objects.all()
+        serializer = AdminSerializer(admins, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class AdminUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def put(self, request, student_id):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        admin = get_object_or_404(Admin, student__student_id=student_id)
+        student = admin.student
+        university_id = request.data.get('university', student.university_id)
+        try:
+            university_id = int(university_id)
+            get_object_or_404(University, id=university_id)
+        except (ValueError, TypeError):
+            return Response({"error": "University must be a valid ID (integer)"}, status=status.HTTP_400_BAD_REQUEST)
+        student_data = {
+            'name': request.data.get('name', student.name),
+            'email': request.data.get('email', student.email),
+            'phone_number': request.data.get('phone_number', student.phone_number),
+            'university': university_id,
+            'can_vote': True
+        }
+        student_serializer = StudentSerializer(student, data=student_data, partial=True)
+        if student_serializer.is_valid():
+            student_serializer.save()
+            admin_data = {
+                'role': request.data.get('role', admin.role),
+                'name': request.data.get('name', admin.name)
+            }
+            for key, value in admin_data.items():
+                setattr(admin, key, value)
+            admin.save()
+            return Response({
+                "message": "Admin updated",
+                "admin": AdminSerializer(admin).data
+            }, status=status.HTTP_200_OK)
+        return Response(student_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class AdminDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, student_id):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        admin = get_object_or_404(Admin, student__student_id=student_id)
+        admin.delete()
+        return Response({"message": "Admin deleted"}, status=status.HTTP_200_OK)
+
+class UniversityCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        serializer = UniversitySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class UniversityListView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        universities = University.objects.all()
+        serializer = UniversitySerializer(universities, many=True)
+        return Response(serializer.data)
+
+class UniversityUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def put(self, request, pk):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        university = get_object_or_404(University, pk=pk)
+        serializer = UniversitySerializer(university, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class UniversityDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, pk):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        university = get_object_or_404(University, pk=pk)
+        university.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class RoleUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, student_id):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        serializer = RoleUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        new_role = serializer.validated_data['role']
+        admin_instance = Admin.objects.filter(student__student_id=student_id).first()
+        if admin_instance:
+            if new_role == "student":
+                student = admin_instance.student
+                admin_instance.delete()
                 return Response({
                     "message": "Admin demoted to Student",
-                    "user": {
-                        "name": student.name,
-                        "email": student.email,
-                        "role": "student"
+                    "user": StudentSerializer(student).data
+                }, status=status.HTTP_200_OK)
+            elif new_role == "admin":
+                return Response({
+                    "message": "Role unchanged (already an admin)",
+                    "user": AdminSerializer(admin_instance).data
+                }, status=status.HTTP_200_OK)
+        else:
+            student_instance = Student.objects.filter(student_id=student_id).first()
+            if student_instance:
+                if new_role == "admin":
+                    admin_data = {
+                        'student': student_instance,
+                        'role': "admin",
+                        'name': student_instance.name
                     }
-                })
+                    admin = Admin.objects.create(**admin_data)
+                    return Response({
+                        "message": "Student promoted to Admin",
+                        "user": AdminSerializer(admin).data
+                    }, status=status.HTTP_200_OK)
+                elif new_role == "student":
+                    return Response({
+                        "message": "Role unchanged (already a student)",
+                        "user": StudentSerializer(student_instance).data
+                    }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "message": "User not found",
+                    "user": {
+                        "name": "Unknown",
+                        "email": "Unknown",
+                        "role": new_role
+                    }
+                }, status=status.HTTP_404_NOT_FOUND)
+        return Response({"message": "Invalid role"}, status=status.HTTP_400_BAD_REQUEST)
 
-            return Response({
-                "message": "Role unchanged",
-                "user": {
-                    "name": user_instance.name,
-                    "email": user_instance.email,
-                    "role": new_role
-                }
-            })
+class CandidateCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        student_id = request.data.get('student_id')
+        student = get_object_or_404(Student, student_id=student_id)
+        if Candidate.objects.filter(student=student).exists():
+            return Response({"error": "Student is already a candidate"}, status=status.HTTP_400_BAD_REQUEST)
+        candidate = Candidate.objects.create(student=student)
+        serializer = CandidateSerializer(candidate)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+class CandidateListView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        candidates = Candidate.objects.all()
+        serializer = CandidateSerializer(candidates, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class CandidateUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def put(self, request, pk):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        candidate = get_object_or_404(Candidate, pk=pk)
+        serializer = CandidateSerializer(candidate, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CandidateDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, pk):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        candidate = get_object_or_404(Candidate, pk=pk)
+        candidate.delete()
+        return Response({"message": "Candidate deleted"}, status=status.HTTP_200_OK)
+
+class ElectionCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        serializer = ElectionSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ElectionListView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        elections = Election.objects.all()
+        serializer = ElectionSerializer(elections, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class ElectionUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def put(self, request, pk):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        election = get_object_or_404(Election, pk=pk)
+        serializer = ElectionSerializer(election, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ElectionDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, pk):
+        if not request.user.is_superuser:
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+        election = get_object_or_404(Election, pk=pk)
+        election.delete()
+        return Response({"message": "Election deleted"}, status=status.HTTP_200_OK)
