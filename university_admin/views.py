@@ -121,7 +121,7 @@ class ImportStudentsView(APIView):
                         'name': row['name'],
                         'email': row['email'],
                         'phone_number': row['phone_number'],
-                        'university': university,  # Pass University instance
+                        'university': university,
                         'can_vote': True
                     }
                 )
