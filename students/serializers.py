@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Student, University, Admin
+from .models import Student, University, Admin  # Relative import from students/models.py
 from django.contrib.auth.hashers import make_password
 
 class UniversitySerializer(serializers.ModelSerializer):
@@ -28,6 +28,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     university = serializers.PrimaryKeyRelatedField(queryset=University.objects.all(), allow_null=True)
+
     class Meta:
         model = Student
         fields = [
@@ -36,12 +37,14 @@ class StudentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['is_active', 'is_staff', 'can_vote', 'date_joined']
         extra_kwargs = {'password': {'write_only': True, 'required': False}}
+
     def validate_university(self, value):
         if value is None:
             return value
         if not University.objects.filter(id=value.id).exists():
             raise serializers.ValidationError("Invalid university ID.")
         return value
+
     def create(self, validated_data):
         password = validated_data.pop('password', None)
         student = Student(**validated_data)
@@ -51,6 +54,7 @@ class StudentSerializer(serializers.ModelSerializer):
             student.set_unusable_password()
         student.save()
         return student
+
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)
         for attr, val in validated_data.items():
@@ -62,10 +66,13 @@ class StudentSerializer(serializers.ModelSerializer):
 
 class AdminSerializer(serializers.ModelSerializer):
     student = StudentSerializer()
+
     class Meta:
         model = Admin
         fields = ['student', 'role', 'name']
-        read_only_fields = ['role']
+        # Removed 'role' from read_only_fields to allow updates
+        read_only_fields = ['name']  # Only name is read-only now
+
     def create(self, validated_data):
         student_data = validated_data.pop('student')
         # create Student via serializer to hash password appropriately
@@ -74,6 +81,7 @@ class AdminSerializer(serializers.ModelSerializer):
         student = student_serializer.save()
         admin = Admin.objects.create(student=student, **validated_data)
         return admin
+
     def update(self, instance, validated_data):
         student_data = validated_data.pop('student', None)
         if student_data:
@@ -81,6 +89,6 @@ class AdminSerializer(serializers.ModelSerializer):
             student_serializer.is_valid(raise_exception=True)
             student_serializer.save()
         instance.name = validated_data.get('name', instance.name)
-        instance.role = validated_data.get('role', instance.role)
+        instance.role = validated_data.get('role', instance.role)  # Allow role update
         instance.save()
         return instance
