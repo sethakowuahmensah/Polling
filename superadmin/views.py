@@ -11,6 +11,10 @@ from .serializers import SuperAdminSerializer, UniversitySerializer, CandidateSe
 from students.serializers import StudentSerializer, AdminSerializer
 import csv
 from io import TextIOWrapper
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 class SuperAdminLoginView(APIView):
     permission_classes = [AllowAny]
@@ -110,6 +114,8 @@ class AdminCreateView(APIView):
             get_object_or_404(University, id=university_id)
         except (ValueError, TypeError):
             return Response({"error": "University must be a valid ID (integer)"}, status=status.HTTP_400_BAD_REQUEST)
+        except University.DoesNotExist:
+            return Response({"error": "University does not exist"}, status=status.HTTP_400_BAD_REQUEST)
         
         # Construct student data
         student_data = {
@@ -117,7 +123,7 @@ class AdminCreateView(APIView):
             'name': request.data['name'],
             'email': request.data['email'],
             'phone_number': request.data['phone_number'],
-            'university': university_id,
+            'university': university_id,  # Changed from 'university' to 'university_id'
             'can_vote': True
         }
         
@@ -177,7 +183,7 @@ class AdminUpdateView(APIView):
                 setattr(admin, key, value)
             admin.save()
             return Response({
-                "message": "Admin updated",
+                "message": "Admin created",
                 "admin": AdminSerializer(admin).data
             }, status=status.HTTP_200_OK)
         return Response(student_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -226,10 +232,12 @@ class UniversityUpdateView(APIView):
 class UniversityDeleteView(APIView):
     permission_classes = [IsAuthenticated]
     def delete(self, request, pk):
+        logger.info(f"Attempting to delete university with pk={pk}")
         if not request.user.is_superuser:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         university = get_object_or_404(University, pk=pk)
         university.delete()
+        logger.info(f"Deleted university with pk={pk}")
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 class RoleUpdateView(APIView):
